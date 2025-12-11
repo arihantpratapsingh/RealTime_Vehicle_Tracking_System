@@ -1,4 +1,3 @@
-// --- START OF FILE app.js ---
 
 // Simple state management
 const state = {
@@ -7,7 +6,7 @@ const state = {
   isPlaying: false,
   isProcessing: false,
   showOverlay: true,
-  stats: { cars: 0, trucks: 0, buses: 0, bikes: 0 },
+  stats: {}, // ⬅️ dynamic stats for ALL classes
   fps: 0,
   logs: [],
   confidenceThreshold: 0.5,
@@ -16,6 +15,7 @@ const state = {
   lastFpsTime: performance.now(),
   analytics: { total: 0, passedUp: 0, passedDown: 0 },
   linePos: 0.5,
+  currentModel: null, // Track currently active model name
 };
 
 const WS_URL = 'ws://localhost:8000/ws/detect';
@@ -46,10 +46,6 @@ const iouSlider = document.getElementById('iou-slider');
 const iouLabel = document.getElementById('iou-label');
 const processingDot = document.getElementById('processing-dot');
 const processingText = document.getElementById('processing-text');
-const statCars = document.getElementById('stat-cars');
-const statTrucks = document.getElementById('stat-trucks');
-const statBikes = document.getElementById('stat-bikes');
-const statBuses = document.getElementById('stat-buses');
 const logList = document.getElementById('log-list');
 const eventsCount = document.getElementById('events-count');
 const inferenceTimeEl = document.getElementById('inference-time');
@@ -66,6 +62,10 @@ const analyticsTotal = document.getElementById('analytics-total');
 const analyticsUp = document.getElementById('analytics-up');
 const analyticsDown = document.getElementById('analytics-down');
 const analyticsFps = document.getElementById('analytics-fps');
+// NEW: Model UI Elements
+const modelSelect = document.getElementById('model-select');
+const modelClassesCount = document.getElementById('model-classes-count');
+
 const settingOverlay = document.getElementById('setting-overlay');
 const linePosSlider = document.getElementById('line-pos-slider');
 const linePosLabel = document.getElementById('line-pos-label');
@@ -73,8 +73,6 @@ const settingsConfSlider = document.getElementById('settings-conf-slider');
 const settingsIouSlider = document.getElementById('settings-iou-slider');
 const settingsConfLabel = document.getElementById('settings-conf-label');
 const settingsIouLabel = document.getElementById('settings-iou-label');
-
-// --- HELPER FUNCTIONS ---
 
 function setProcessing(isProcessing) {
   state.isProcessing = isProcessing;
@@ -84,11 +82,63 @@ function setProcessing(isProcessing) {
   processingText.textContent = isProcessing ? `PROCESSING ${state.fps} FPS` : "IDLE";
 }
 
+// LIVE FEED STATS - COMPACT (INSIDE LIST)
 function updateStatsDisplay() {
-  statCars.textContent = state.stats.cars;
-  statTrucks.textContent = state.stats.trucks;
-  statBikes.textContent = state.stats.bikes;
-  statBuses.textContent = state.stats.buses;
+  const container = document.getElementById("live-stats-compact");
+  if (!container) return; 
+
+  if (!state.stats || Object.keys(state.stats).length === 0) {
+     return;
+  }
+
+  container.innerHTML = ""; 
+  
+  const relevant = Object.entries(state.stats).filter(([k,v]) => v > 0);
+  const displayItems = relevant.length > 0 ? relevant.slice(0, 4) : [['Vehicles', 0], ['FPS', state.fps]];
+
+  displayItems.forEach(([cls, count]) => {
+    const div = document.createElement('div');
+    div.className = "bg-slate-800/50 p-2 rounded-lg flex flex-col items-center justify-center";
+    div.innerHTML = `
+      <span class="text-[10px] text-slate-500 uppercase font-bold tracking-wide">${cls}</span>
+      <span class="text-lg font-bold text-white">${count}</span>
+    `;
+    container.appendChild(div);
+  });
+}
+
+// --- NEW: Build Dynamic Analytics Section ---
+function buildAnalyticsSection() {
+  const grid = document.getElementById("analytics-classes-grid");
+  if (!grid) return;
+
+  grid.innerHTML = "";
+
+  const sortedStats = Object.entries(state.stats).sort((a, b) => b[1] - a[1]);
+  const activeStats = sortedStats.filter(([_, count]) => count > 0);
+
+  if (activeStats.length === 0) {
+    grid.innerHTML = `<div class="col-span-full flex flex-col items-center justify-center p-8 text-slate-500 bg-slate-800/20 rounded-xl border border-dashed border-slate-700">
+      <p>No objects detected yet.</p>
+    </div>`;
+    return;
+  }
+
+  activeStats.forEach(([cls, count]) => {
+    const div = document.createElement("div");
+    div.className = "p-4 bg-slate-800/40 rounded-xl border border-slate-700/50 flex flex-col items-start hover:bg-slate-800 transition-colors";
+
+    div.innerHTML = `
+      <span class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-2">${cls}</span>
+      <div class="flex w-full items-center justify-between">
+        <span class="text-2xl font-bold text-white">${count}</span>
+        <div class="h-2 w-16 bg-slate-700 rounded-full overflow-hidden">
+           <div class="h-full bg-emerald-500" style="width: ${Math.min(100, count * 5)}%"></div>
+        </div>
+      </div>
+    `;
+    grid.appendChild(div);
+  });
 }
 
 function addLogItem({ type, time, confidence }) {
@@ -103,15 +153,8 @@ function addLogItem({ type, time, confidence }) {
   left.className = "flex items-center gap-3";
 
   const iconWrap = document.createElement("span");
-  iconWrap.className = "p-1.5 rounded-md bg-slate-800";
-  const color =
-    type === "truck"
-      ? "text-orange-400"
-      : type === "motorbike"
-      ? "text-purple-400"
-      : "text-blue-400";
-
-  iconWrap.classList.add(color);
+  iconWrap.className = "p-1.5 rounded-md bg-slate-800 text-indigo-400";
+  
   iconWrap.innerHTML =
     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg>';
 
@@ -197,7 +240,7 @@ function handleFileUpload(file) {
   // Reset
   videoEl.src = state.fileUrl;
   videoEl.currentTime = 0;
-  state.stats = { cars: 0, trucks: 0, buses: 0, bikes: 0 };
+  state.stats = {};
   state.analytics = { total: 0, passedUp: 0, passedDown: 0 };
   tracks.length = 0;
   logList.innerHTML = "";
@@ -205,6 +248,7 @@ function handleFileUpload(file) {
   fileNameEl.textContent = file.name || "Unknown source";
   emptyStateEl.style.display = "none";
   updateStatsDisplay();
+  buildAnalyticsSection();
 
   // Initialize canvas size once metadata is loaded
   videoEl.onloadedmetadata = () => {
@@ -241,7 +285,6 @@ function togglePlayback() {
 }
 
 // 1. Capture Frame & Send
-// Optimized: Send Binary Blob instead of Base64 String
 function processCurrentFrame() {
   if (!state.isPlaying) return;
   if (!wsConnected || wsBusy) return;
@@ -286,19 +329,26 @@ function processCurrentFrame() {
   }
 }
 
+// Generate deterministic color from class name
+function classColor(name) {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const c = (hash & 0x00ffffff).toString(16).toUpperCase();
+  return "#" + "000000".substring(0, 6 - c.length) + c;
+}
+
 // 2. Render Results & Advance Frame
 function renderAndAdvance(detections) {
   const ctx = canvasEl.getContext("2d");
   
-  // OPTIMIZATION: Only resize canvas if dimensions actually change.
-  // Setting .width/.height clears the canvas, causing black flicker if done every frame.
   if (canvasEl.width !== videoEl.videoWidth || canvasEl.height !== videoEl.videoHeight) {
     canvasEl.width = videoEl.videoWidth;
     canvasEl.height = videoEl.videoHeight;
   }
 
-  // A. Draw the actual video frame first (This acts as the player view)
-  // We force the drawImage to happen before we process detections
+  // A. Draw the actual video frame first
   ctx.drawImage(videoEl, 0, 0, canvasEl.width, canvasEl.height);
 
   // B. Draw Overlay
@@ -308,7 +358,6 @@ function renderAndAdvance(detections) {
 
     // Detection coordinates come from 640xN, scale to full res
     const yoloW = 640;
-    // We calculate yoloH based on aspect ratio to ensure boxes align perfectly
     const yoloH = Math.round(videoEl.videoHeight * (640 / videoEl.videoWidth));
     
     const scaleX = containerW / yoloW;
@@ -323,10 +372,7 @@ function renderAndAdvance(detections) {
       const w = det.w * scaleX;
       const h = det.h * scaleY;
 
-      let color = "#3b82f6";
-      if (det.class === "truck") color = "#f97316";
-      if (det.class === "bus") color = "#eab308";
-      if (det.class === "motorbike") color = "#a855f7";
+      const color = classColor(det.class);
 
       ctx.strokeStyle = color;
       ctx.lineWidth = 3;
@@ -367,7 +413,6 @@ function renderAndAdvance(detections) {
 
   // D. Advance Video to next frame
   if (state.isPlaying && !videoEl.ended) {
-    // Determine step based on video FPS (default to 30fps / 0.033s if unknown)
     const step = 1 / 30; 
     videoEl.currentTime = Math.min(videoEl.duration, videoEl.currentTime + step);
   } else if (videoEl.ended) {
@@ -378,11 +423,9 @@ function renderAndAdvance(detections) {
   }
 }
 
-// 3. Listener: When video has finished seeking to the new time, process again
+// 3. Listener: When video has finished seeking
 videoEl.addEventListener('seeked', () => {
   if (state.isPlaying) {
-    // Small timeout prevents browser choking if seeking is instant
-    // requestAnimationFrame ensures we paint the DOM before grabbing image
     requestAnimationFrame(() => processCurrentFrame());
   }
 });
@@ -409,24 +452,19 @@ function connectWS() {
 
     if (!data) return;
 
-    // Log logic
     const newDets = data.detections || [];
     state.stats = data.stats || {};
+
     updateStatsDisplay();
-    
-    // Analytics
-    state.analytics.total += newDets.length; // Note: this is sum of dets per frame, not unique.
-    // Logic for logs (throttle slightly or filter)
-    const nowStr = new Date().toLocaleTimeString();
-    // Only log high confidence events or new IDs (simplified here)
-    // For specific log logic, you might want to filter by Track ID if available
-    
-    analyticsTotal.textContent = state.analytics.total; // This metric might grow huge, usually you count unique IDs
+    buildAnalyticsSection(); // ⬅️ Trigger analytics update
+
+    // Update analytics numbers
+    state.analytics.total += newDets.length;
+    analyticsTotal.textContent = state.analytics.total;
     analyticsUp.textContent = state.analytics.passedUp;
     analyticsDown.textContent = state.analytics.passedDown;
     analyticsFps.textContent = state.fps;
 
-    // Trigger rendering and next frame
     renderAndAdvance(newDets);
   };
 
@@ -442,6 +480,72 @@ function connectWS() {
   };
 }
 
+// --- NEW: Model Management Functions ---
+async function fetchModels() {
+  try {
+    const res = await fetch('http://localhost:8000/models/list');
+    const data = await res.json();
+    modelSelect.innerHTML = '';
+    
+    if (data.models && data.models.length > 0) {
+      data.models.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = m;
+        modelSelect.appendChild(opt);
+      });
+      // Fetch current to set selected
+      fetchCurrentModel();
+    } else {
+      modelSelect.innerHTML = '<option>No models found</option>';
+    }
+  } catch (e) {
+    console.error("Error fetching models:", e);
+  }
+}
+
+async function fetchCurrentModel() {
+  try {
+    const res = await fetch('http://localhost:8000/models/current');
+    const data = await res.json();
+    if(data.name) {
+       modelSelect.value = data.name;
+       updateModelUI(data);
+    }
+  } catch {}
+}
+
+async function switchModel(modelName) {
+  try {
+    setProcessing(false); // pause visual processing indicator briefly
+    const res = await fetch(`http://localhost:8000/models/select?model_name=${modelName}`, {
+       method: 'POST'
+    });
+    const data = await res.json();
+    if(data.status === 'success') {
+       updateModelUI(data.model);
+       // Reset stats on model change? Optional.
+    }
+  } catch (e) {
+    alert("Failed to switch model");
+  }
+}
+
+function updateModelUI(modelData) {
+  state.currentModel = modelData.name;
+  if(modelData.count) {
+    modelClassesCount.textContent = `${modelData.count} Classes`;
+  }
+}
+
+// Event Listeners for Model Select
+modelSelect.addEventListener('change', (e) => {
+   switchModel(e.target.value);
+});
+
+// Call on startup
+fetchModels();
+
 // --- EVENT LISTENERS ---
 
 fileInputEl.addEventListener("change", (e) =>
@@ -449,9 +553,6 @@ fileInputEl.addEventListener("change", (e) =>
 );
 
 playBtn.addEventListener("click", togglePlayback);
-
-// Remove default video events like 'play'/'pause' controlling logic
-// because we control currentTime manually.
 
 overlayToggle.addEventListener("click", () => {
   state.showOverlay = !state.showOverlay;
